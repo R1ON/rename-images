@@ -64,18 +64,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
 
   const newNames = await Promise.all(globPromises);
 
-  let index = 0;
-
   newNames.forEach((names) => {
-    fs.rename(names.imagePath, names.newImagePath, (err) => {
-      index++;
-
-      console.log(`${index} / ${newNames.length}`);
-      if (err) {
-        console.log('Не удалось переименовать = ', names.imagePath);
-        console.log('err', err);
-        return null;
-      }
-    });
+    fs.renameSync(names.imagePath, names.newImagePath);
   });
 });

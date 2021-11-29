@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const glob = require('glob');
 const csv = require('csv-parser');
+const cliProgress = require('cli-progress');
 
 // ---
 
@@ -15,7 +16,8 @@ glob('*.csv', { nodir: true }, async (err, files) => {
 
   if (files.length > 1) {
     console.warn('Было найдено более 1 .csv файла. Для переименования будет использован только первый найденный = ', filePath);
-    console.warn('Все .csv файлы, которые были найдены:\n', files.join('\n'));
+    console.warn('Все .csv файлы, которые были найдены:');
+    console.warn(files.join('\n'));
   }
 
   const csvData = await new Promise((res) => {
@@ -28,43 +30,56 @@ glob('*.csv', { nodir: true }, async (err, files) => {
         res(results);
       });
   });
+  
+  const chunksCSV = splitByChunks(csvData, 1000);
 
-  const globPromises = [];
+  const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
+  bar.start(csvData.length, 0);
 
-  csvData.forEach((data) => {
-    if (!data.IMAGE || typeof data.IMAGE !== 'string' || !data.ID) {
-      return;
-    }
+  const notRenamedImages = [];
 
-    const promise = new Promise((res, rej) => {
-      glob(`images/**/${data.IMAGE}`, { nodir: true }, async (err, images) => {
-        if (err) {
-          console.log('err', err);
-          rej(err);
-          return;
-        }
+  for (const csvData of chunksCSV) {
+    const globPromises = [];
 
-        const imagePath = images[0];
+    csvData.forEach((data) => {
+      if (!data.IMAGE || typeof data.IMAGE !== 'string' || !data.ID) {
+        bar.increment();
+        return null;
+      }
 
-        if (!imagePath) {
-          console.log('Не найдена картинка с именем: ', data.IMAGE);
-          return;
-        }
+      const images = glob.sync(`images/**/${data.IMAGE}`, { nodir: true });
 
-        const { dir, ext } = path.parse(imagePath);
+      const imagePath = images[0];
 
-        const newImagePath = path.join(dir, `${data.ID}${ext}`);
+      if (!imagePath) {
+        bar.increment();
+        notRenamedImages.push(data.IMAGE);
+        return;
+      }
 
-        res({ imagePath, newImagePath });
-      });
+      const { dir, ext } = path.parse(imagePath);
+
+      const newImagePath = path.join(dir, `${data.ID}${ext}`);
+
+      bar.increment();
+      fs.renameSync(imagePath, newImagePath);
     });
+  }
 
-    globPromises.push(promise);
-  });
-
-  const newNames = await Promise.all(globPromises);
-
-  newNames.forEach((names) => {
-    fs.renameSync(names.imagePath, names.newImagePath);
-  });
+  bar.stop();
+  
+  if (notRenamedImages.length > 0) {
+    console.log('Некоторые картинки не были переименованны (возможно их нет в .csv файле): ');
+    console.log(notRenamedImages.join('\n'));
+  }
 });
+
+function splitByChunks(files, chunks) {
+  const tempArray = [];
+
+  for (let i = 0; i < files.length; i += chunks) {
+    tempArray.push(files.slice(i, i + chunks));
+  }
+
+  return tempArray;
+}

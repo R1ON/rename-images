@@ -33,56 +33,81 @@ glob('*.csv', { nodir: true }, async (err, files) => {
         res(results);
       });
   });
-  
-  const multiBar = new cliProgress.MultiBar({
-    clearOnComplete: false,
-    hideCursor: true
-  }, cliProgress.Presets.shades_grey);
 
-  const chunksCSV = splitToChunks(csvData, NUMBER_OF_WORKERS);
+  console.log('Сканирую картинки...');
+  glob(`images2/**/*`, { nodir: true }, async (err, images) => {
+    if (err) {
+      console.log('err', err);
+      return null;
+    }
 
-  const comparisonPromises = chunksCSV.map((csvChunk) => {
-    const notRenamedImages = [];
-    const bar = multiBar.create(csvChunk.length, 0);
+    console.log('Было найдено картинок:', images.length);
+    console.log('Идет подготовка картинок для обработки...');
 
-    return new Promise((resolve, reject) => {
-      const worker = new Worker(getFunctionBody(renameCycle.toString()), {
-        eval: true,
-        workerData: {
-          csvChunk,
-        },
+    const imagesWithInfo = images.map((image) => {
+      const { name, ext, dir } = path.parse(image);
+
+      return ({
+        ext,
+        dir,
+        name: `${name}${ext}`,
+        fullPath: image,
       });
+    });
 
-      worker.on('message', (value) => {
-        if (value.hasOwnProperty('notRenamedImage')) {
-          notRenamedImages.push(value.notRenamedImage);
-        }
+    console.log('Подготовка завершена');
 
-        if (value.message === 'inc') {
-          bar.increment();
-        }
-      });
+    const multiBar = new cliProgress.MultiBar({
+      clearOnComplete: false,
+      hideCursor: true
+    }, cliProgress.Presets.shades_grey);
 
-      worker.on('error', reject);
-      worker.on('exit', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Worker stopped with exit code ${code}`));
-        }
+    const chunksCSV = splitToChunks(csvData, NUMBER_OF_WORKERS);
 
-        resolve(notRenamedImages);
-      });
-    })
+    const comparisonPromises = chunksCSV.map((csvChunk) => {
+      const notRenamedImages = [];
+      const bar = multiBar.create(csvChunk.length, 0);
+
+      return new Promise((resolve, reject) => {
+        const worker = new Worker(getFunctionBody(renameCycle.toString()), {
+          eval: true,
+          workerData: {
+            csvChunk,
+            images: imagesWithInfo,
+          },
+        });
+
+        worker.on('message', (value) => {
+          if (value.hasOwnProperty('notRenamedImage')) {
+            notRenamedImages.push(value.notRenamedImage);
+          }
+
+          if (value.message === 'inc') {
+            bar.increment();
+          }
+        });
+
+        worker.on('error', reject);
+        worker.on('exit', (code) => {
+          if (code !== 0) {
+            reject(new Error(`Worker stopped with exit code ${code}`));
+          }
+
+          resolve(notRenamedImages);
+        });
+      })
+    });
+
+    const notRenamedImages = await Promise.all(comparisonPromises);
+    const notRenamedImagesFlatArray = notRenamedImages.flat();
+
+    multiBar.stop();
+
+    if (notRenamedImagesFlatArray.length > 0) {
+      console.log('Некоторые картинки не были переименованны (возможно их нет в .csv файле): ');
+      console.log(notRenamedImagesFlatArray.join('\n'));
+    }
   });
-
-  const notRenamedImages = await Promise.all(comparisonPromises);
-  const notRenamedImagesFlatArray = notRenamedImages.flat();
-
-  multiBar.stop();
-
-  if (notRenamedImagesFlatArray.length > 0) {
-    console.log('Некоторые картинки не были переименованны (возможно их нет в .csv файле): ');
-    console.log(notRenamedImagesFlatArray.join('\n'));
-  }
 });
 
 function renameCycle() {
@@ -91,7 +116,7 @@ function renameCycle() {
   const fs = require('fs');
   const { workerData, parentPort } = require('worker_threads');
 
-  const { csvChunk } = workerData;
+  const { csvChunk, images } = workerData;
 
   for (const data of csvChunk) {
     if (!data.IMAGE || typeof data.IMAGE !== 'string' || !data.ID) {
@@ -99,29 +124,20 @@ function renameCycle() {
       continue;
     }
 
-    glob(`images/**/${data.IMAGE}`, { nodir: true }, (err, images) => {
+    const image = images.find((image) => image.name === data.IMAGE);
+
+    if (!image) {
+      parentPort.postMessage({ message: 'inc', notRenamedImage: data.IMAGE });
+      continue;
+    }
+
+    const newImagePath = path.join(image.dir, `${data.ID}${image.ext}`);
+
+    fs.rename(image.fullPath, newImagePath, (err) => {
       if (err) {
         console.log('err', err);
-        return null;
       }
-
-      const imagePath = images[0];
-
-      if (!imagePath) {
-        parentPort.postMessage({ message: 'inc', notRenamedImage: data.IMAGE });
-        return null
-      }
-
-      const { dir, ext } = path.parse(imagePath);
-
-      const newImagePath = path.join(dir, `${data.ID}${ext}`);
-
-      fs.rename(imagePath, newImagePath, (err) => {
-        if (err) {
-          console.log('err', err);
-        }
-        parentPort.postMessage({ message: 'inc' });
-      });
+      parentPort.postMessage({ message: 'inc' });
     });
   }
 }

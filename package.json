@@ -6,6 +6,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "cli-progress": "^3.9.1",
     "csv-parser": "^3.0.0",

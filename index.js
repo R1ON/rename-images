@@ -3,8 +3,11 @@ const path = require('path');
 const glob = require('glob');
 const csv = require('csv-parser');
 const cliProgress = require('cli-progress');
+const { Worker } = require('worker_threads');
 
 // ---
+
+const NUMBER_OF_WORKERS = process.argv.slice(2)[0] || 2;
 
 glob('*.csv', { nodir: true }, async (err, files) => {
   if (err) {
@@ -31,55 +34,111 @@ glob('*.csv', { nodir: true }, async (err, files) => {
       });
   });
   
-  const chunksCSV = splitByChunks(csvData, 1000);
+  const multiBar = new cliProgress.MultiBar({
+    clearOnComplete: false,
+    hideCursor: true
+  }, cliProgress.Presets.shades_grey);
 
-  const bar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
-  bar.start(csvData.length, 0);
+  const chunksCSV = splitToChunks(csvData, NUMBER_OF_WORKERS);
 
-  const notRenamedImages = [];
+  const comparisonPromises = chunksCSV.map((csvChunk) => {
+    const bar = multiBar.create(csvChunk.length, 0);
 
-  for (const csvData of chunksCSV) {
-    const globPromises = [];
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(getFunctionBody(renameCycle.toString()), {
+        eval: true,
+        workerData: {
+          csvChunk,
+        },
+      });
 
-    csvData.forEach((data) => {
-      if (!data.IMAGE || typeof data.IMAGE !== 'string' || !data.ID) {
-        bar.increment();
-        return null;
-      }
+      worker.on('message', (value) => {
+        if (value.message === 'inc') {
+          bar.increment();
+          return;
+        }
 
-      const images = glob.sync(`images/**/${data.IMAGE}`, { nodir: true });
+        resolve(value.notRenamedImages);
+      });
 
-      const imagePath = images[0];
+      worker.on('error', reject);
+      worker.on('exit', (code) => {
+        if (code !== 0)
+          reject(new Error(`Worker stopped with exit code ${code}`));
+      });
+    })
+  });
 
-      if (!imagePath) {
-        bar.increment();
-        notRenamedImages.push(data.IMAGE);
-        return;
-      }
+  const notRenamedImages = await Promise.all(comparisonPromises);
+  const notRenamedImagesFlatArray = notRenamedImages.flat();
 
-      const { dir, ext } = path.parse(imagePath);
+  multiBar.stop();
 
-      const newImagePath = path.join(dir, `${data.ID}${ext}`);
-
-      bar.increment();
-      fs.renameSync(imagePath, newImagePath);
-    });
-  }
-
-  bar.stop();
-  
-  if (notRenamedImages.length > 0) {
+  if (notRenamedImagesFlatArray.length > 0) {
     console.log('Некоторые картинки не были переименованны (возможно их нет в .csv файле): ');
-    console.log(notRenamedImages.join('\n'));
+    console.log(notRenamedImagesFlatArray.join('\n'));
   }
 });
 
-function splitByChunks(files, chunks) {
-  const tempArray = [];
+function renameCycle() {
+  const glob = require('glob');
+  const path = require('path');
+  const fs = require('fs');
+  const { workerData, parentPort } = require('worker_threads');
 
-  for (let i = 0; i < files.length; i += chunks) {
-    tempArray.push(files.slice(i, i + chunks));
+  const { csvChunk } = workerData;
+
+  const notRenamedImages = [];
+
+  for (const data of csvChunk) {
+    if (!data.IMAGE || typeof data.IMAGE !== 'string' || !data.ID) {
+      parentPort.postMessage({ message: 'inc' });
+      continue;
+    }
+
+    const images = glob.sync(`images/**/${data.IMAGE}`, { nodir: true });
+
+    const imagePath = images[0];
+
+    if (!imagePath) {
+      parentPort.postMessage({ message: 'inc' });
+      notRenamedImages.push(data.IMAGE);
+      continue;
+    }
+
+    const { dir, ext } = path.parse(imagePath);
+
+    const newImagePath = path.join(dir, `${data.ID}${ext}`);
+
+    fs.renameSync(imagePath, newImagePath);
+    parentPort.postMessage({ message: 'inc' });
+  }
+  
+  parentPort.postMessage({ message: 'end', notRenamedImages });
+}
+
+function splitToChunks(array, chunkSize) {
+  const chunkLength = Math.max(array.length / chunkSize, 1);
+  const chunks = [];
+
+  for (let i = 0; i < chunkSize; i++) {
+    const chunkPosition = chunkLength * (i + 1);
+
+    if (chunkPosition <= array.length) {
+      chunks.push(array.slice(chunkLength * i, chunkPosition));
+    }
   }
 
-  return tempArray;
+  return chunks;
+}
+
+function getFunctionBody(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.substring(
+    value.indexOf('{') + 1,
+    value.lastIndexOf('}')
+  );
 }

@@ -42,6 +42,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
   const chunksCSV = splitToChunks(csvData, NUMBER_OF_WORKERS);
 
   const comparisonPromises = chunksCSV.map((csvChunk) => {
+    const notRenamedImages = [];
     const bar = multiBar.create(csvChunk.length, 0);
 
     return new Promise((resolve, reject) => {
@@ -53,18 +54,22 @@ glob('*.csv', { nodir: true }, async (err, files) => {
       });
 
       worker.on('message', (value) => {
-        if (value.message === 'inc') {
-          bar.increment();
-          return;
+        if (value.hasOwnProperty('notRenamedImage')) {
+          notRenamedImages.push(value.notRenamedImage);
         }
 
-        resolve(value.notRenamedImages);
+        if (value.message === 'inc') {
+          bar.increment();
+        }
       });
 
       worker.on('error', reject);
       worker.on('exit', (code) => {
-        if (code !== 0)
+        if (code !== 0) {
           reject(new Error(`Worker stopped with exit code ${code}`));
+        }
+
+        resolve(notRenamedImages);
       });
     })
   });
@@ -88,33 +93,37 @@ function renameCycle() {
 
   const { csvChunk } = workerData;
 
-  const notRenamedImages = [];
-
   for (const data of csvChunk) {
     if (!data.IMAGE || typeof data.IMAGE !== 'string' || !data.ID) {
       parentPort.postMessage({ message: 'inc' });
       continue;
     }
 
-    const images = glob.sync(`images/**/${data.IMAGE}`, { nodir: true });
+    glob(`images/**/${data.IMAGE}`, { nodir: true }, (err, images) => {
+      if (err) {
+        console.log('err', err);
+        return null;
+      }
 
-    const imagePath = images[0];
+      const imagePath = images[0];
 
-    if (!imagePath) {
-      parentPort.postMessage({ message: 'inc' });
-      notRenamedImages.push(data.IMAGE);
-      continue;
-    }
+      if (!imagePath) {
+        parentPort.postMessage({ message: 'inc', notRenamedImage: data.IMAGE });
+        return null
+      }
 
-    const { dir, ext } = path.parse(imagePath);
+      const { dir, ext } = path.parse(imagePath);
 
-    const newImagePath = path.join(dir, `${data.ID}${ext}`);
+      const newImagePath = path.join(dir, `${data.ID}${ext}`);
 
-    fs.renameSync(imagePath, newImagePath);
-    parentPort.postMessage({ message: 'inc' });
+      fs.rename(imagePath, newImagePath, (err) => {
+        if (err) {
+          console.log('err', err);
+        }
+        parentPort.postMessage({ message: 'inc' });
+      });
+    });
   }
-  
-  parentPort.postMessage({ message: 'end', notRenamedImages });
 }
 
 function splitToChunks(array, chunkSize) {

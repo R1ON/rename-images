@@ -15,7 +15,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
     return;
   }
 
-  const filePath = files[0];
+  const filePath = files[1];
 
   if (files.length > 1) {
     console.warn('Было найдено более 1 .csv файла. Для переименования будет использован только первый найденный = ', filePath);
@@ -105,7 +105,10 @@ glob('*.csv', { nodir: true }, async (err, files) => {
 
     if (notRenamedImagesFlatArray.length > 0) {
       console.log('Некоторые картинки не были переименованны (возможно их нет в .csv файле): ');
-      console.log(notRenamedImagesFlatArray.join('\n'));
+      console.log('Будет создан notRenamedImages.txt');
+      fs.writeFile('notRenamedImages.txt', notRenamedImagesFlatArray.join('\n'), () => {
+        console.log('Файл notRenamedImages.txt создан');
+      });
     }
   });
 });

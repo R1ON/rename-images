@@ -15,7 +15,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
     return;
   }
 
-  const filePath = files[1];
+  const filePath = files[0];
 
   if (files.length > 1) {
     console.warn('Было найдено более 1 .csv файла. Для переименования будет использован только первый найденный = ', filePath);

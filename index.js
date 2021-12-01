@@ -35,7 +35,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
   });
 
   console.log('Сканирую картинки...');
-  glob(`images2/**/*`, { nodir: true }, async (err, images) => {
+  glob(`images/**/*`, { nodir: true }, async (err, images) => {
     if (err) {
       console.log('err', err);
       return null;

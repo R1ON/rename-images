@@ -23,6 +23,8 @@ glob('*.csv', { nodir: true }, async (err, files) => {
     console.warn(files.join('\n'));
   }
 
+  console.log('Проверяю CSV файл...');
+
   const csvData = await new Promise((res) => {
     const results = [];
 
@@ -34,7 +36,48 @@ glob('*.csv', { nodir: true }, async (err, files) => {
       });
   });
 
-  console.log('Сканирую картинки...');
+  let repeatingCSV = new Map();
+  const uniqCSVImagePath = [];
+
+  const uniqCSV = csvData.reduce((acc, csv) => {
+    if (uniqCSVImagePath.includes(csv.IMAGE)) {
+      const prevValue = repeatingCSV.get(csv.IMAGE) || [];
+
+      repeatingCSV.set(csv.IMAGE, [...prevValue, csv]);
+    }
+    else {
+      uniqCSVImagePath.push(csv.IMAGE);
+      acc.push(csv);
+    }
+
+    return acc;
+  }, []);
+  
+  if (repeatingCSV.size > 0) {
+    console.log('Были найдены повторяющиеся записи в CSV файле. Количество повторов: ', repeatingCSV.size);
+    console.log('Будет создан файл repeatingCSV.txt куда были вынесены все повторы');
+    console.log('На каждый повторяющийся файл будет создана дополнительная картинка');
+
+    const csv = [];
+
+    repeatingCSV.forEach((value) => {
+      value.forEach((csvData) => {
+        csv.push(JSON.stringify(csvData));
+      });
+    });
+
+    fs.writeFile('repeatingCSV.txt', csv.join('\n'), (err) => {
+      if (err) {
+        console.log('Не получилось создать repeatingCSV.txt файл');
+        console.log('err', err);
+        return;
+      }
+
+      console.log('Файл repeatingCSV.txt создан');
+    });
+  }
+
+  console.log('Начинаю сканировать картинки...');
   glob(`images/**/*`, { nodir: true }, async (err, images) => {
     if (err) {
       console.log('err', err);
@@ -62,7 +105,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
       hideCursor: true
     }, cliProgress.Presets.shades_grey);
 
-    const chunksCSV = splitToChunks(csvData, NUMBER_OF_WORKERS);
+    const chunksCSV = splitToChunks(uniqCSV, NUMBER_OF_WORKERS);
 
     const comparisonPromises = chunksCSV.map((csvChunk) => {
       const notRenamedImages = [];
@@ -74,6 +117,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
           workerData: {
             csvChunk,
             images: imagesWithInfo,
+            repeatingCSV,
           },
         });
 
@@ -106,7 +150,13 @@ glob('*.csv', { nodir: true }, async (err, files) => {
     if (notRenamedImagesFlatArray.length > 0) {
       console.log('Некоторые картинки не были переименованны (возможно их нет в .csv файле): ');
       console.log('Будет создан notRenamedImages.txt');
-      fs.writeFile('notRenamedImages.txt', notRenamedImagesFlatArray.join('\n'), () => {
+      fs.writeFile('notRenamedImages.txt', notRenamedImagesFlatArray.join('\n'), (err) => {
+        if (err) {
+          console.log('Не получилось создать notRenamedImages.txt файл');
+          console.log('err', err);
+          return;
+        }
+
         console.log('Файл notRenamedImages.txt создан');
       });
     }
@@ -119,7 +169,7 @@ function renameCycle() {
   const fs = require('fs');
   const { workerData, parentPort } = require('worker_threads');
 
-  const { csvChunk, images } = workerData;
+  const { csvChunk, images, repeatingCSV } = workerData;
 
   for (const data of csvChunk) {
     if (!data.IMAGE || typeof data.IMAGE !== 'string' || !data.ID) {
@@ -133,14 +183,29 @@ function renameCycle() {
       parentPort.postMessage({ message: 'inc', notRenamedImage: data.IMAGE });
       continue;
     }
+    
+    const promises = [];
+
+    if (repeatingCSV.has(data.IMAGE)) {
+      const csvData = repeatingCSV.get(data.IMAGE);
+
+      csvData.forEach((value) => {
+        const newImagePath = path.join(image.dir, `${value.ID}${image.ext}`);
+        promises.push(fs.promises.copyFile(image.fullPath, newImagePath));
+      });
+    }
 
     const newImagePath = path.join(image.dir, `${data.ID}${image.ext}`);
-
-    fs.rename(image.fullPath, newImagePath, (err) => {
-      if (err) {
-        console.log('err', err);
-      }
-      parentPort.postMessage({ message: 'inc' });
+    
+    Promise.all(promises).then(() => {
+      fs.rename(image.fullPath, newImagePath, (err) => {
+        if (err) {
+          console.log('image', image);
+          console.log('newImagePath', newImagePath);
+          console.log('err', err);
+        }
+        parentPort.postMessage({ message: 'inc' });
+      });
     });
   }
 }

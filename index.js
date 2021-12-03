@@ -18,9 +18,12 @@ glob('*.csv', { nodir: true }, async (err, files) => {
   const filePath = files[0];
 
   if (files.length > 1) {
+    console.warn('----------');
     console.warn('Было найдено более 1 .csv файла. Для переименования будет использован только первый найденный = ', filePath);
     console.warn('Все .csv файлы, которые были найдены:');
     console.warn(files.join('\n'));
+    console.warn('----------');
+    console.log('\n');
   }
 
   console.log('Проверяю CSV файл...');
@@ -54,9 +57,12 @@ glob('*.csv', { nodir: true }, async (err, files) => {
   }, []);
   
   if (repeatingCSV.size > 0) {
+    console.warn('==========');
     console.log('Были найдены повторяющиеся записи в CSV файле. Количество повторов: ', repeatingCSV.size);
     console.log('Будет создан файл repeatingCSV.txt куда были вынесены все повторы');
     console.log('На каждый повторяющийся файл будет создана дополнительная картинка');
+    console.warn('==========');
+    console.log('\n');
 
     const csv = [];
 
@@ -148,8 +154,12 @@ glob('*.csv', { nodir: true }, async (err, files) => {
     multiBar.stop();
 
     if (notRenamedImagesFlatArray.length > 0) {
-      console.log('Некоторые картинки не были переименованны (возможно их нет в .csv файле): ');
+      console.warn('----------');
+      console.log('Некоторые картинки, которые были указаны в .csv не были найдена (возможно их нет в папке images)');
       console.log('Будет создан notRenamedImages.txt');
+      console.warn('----------');
+      console.log('\n');
+
       fs.writeFile('notRenamedImages.txt', notRenamedImagesFlatArray.join('\n'), (err) => {
         if (err) {
           console.log('Не получилось создать notRenamedImages.txt файл');

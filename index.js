@@ -115,6 +115,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
 
     const comparisonPromises = chunksCSV.map((csvChunk) => {
       const notRenamedImages = [];
+      const usedImages = [];
       const bar = multiBar.create(csvChunk.length, 0);
 
       return new Promise((resolve, reject) => {
@@ -132,6 +133,10 @@ glob('*.csv', { nodir: true }, async (err, files) => {
             notRenamedImages.push(value.notRenamedImage);
           }
 
+          if (value.hasOwnProperty('image')) {
+            usedImages.push(value.image);
+          }
+
           if (value.message === 'inc') {
             bar.increment();
           }
@@ -143,24 +148,25 @@ glob('*.csv', { nodir: true }, async (err, files) => {
             reject(new Error(`Worker stopped with exit code ${code}`));
           }
 
-          resolve(notRenamedImages);
+          resolve({ notRenamedImages, usedImages });
         });
       })
     });
 
-    const notRenamedImages = await Promise.all(comparisonPromises);
-    const notRenamedImagesFlatArray = notRenamedImages.flat();
+    const comparisonData = await Promise.all(comparisonPromises);
+
+    const notRenamedImages = comparisonData.map((data) => data.notRenamedImages).flat();
 
     multiBar.stop();
 
-    if (notRenamedImagesFlatArray.length > 0) {
+    if (notRenamedImages.length > 0) {
       console.warn('----------');
       console.log('Некоторые картинки, которые были указаны в .csv не были найдена (возможно их нет в папке images)');
       console.log('Будет создан notRenamedImages.txt');
       console.warn('----------');
       console.log('\n');
 
-      fs.writeFile('notRenamedImages.txt', notRenamedImagesFlatArray.join('\n'), (err) => {
+      fs.writeFile('notRenamedImages.txt', notRenamedImages.join('\n'), (err) => {
         if (err) {
           console.log('Не получилось создать notRenamedImages.txt файл');
           console.log('err', err);
@@ -170,11 +176,37 @@ glob('*.csv', { nodir: true }, async (err, files) => {
         console.log('Файл notRenamedImages.txt создан');
       });
     }
+
+    const usedImages = comparisonData.map((data) => data.usedImages).flat();
+
+    const notUsedImages = imagesWithInfo.filter((image) => {
+      return !usedImages.find((usedImage) => usedImage.fullPath === image.fullPath);
+    });
+
+    if (notUsedImages.length > 0) {
+      const dir = 'NOT_USED_IMAGES';
+
+      console.warn('----------');
+      console.warn('Были найдены лишние картинки, которые не указаны в CSV файле.');
+      console.warn('Они будут перемещены в папку ', dir);
+      console.warn('----------');
+
+      if (!fs.existsSync(dir)){
+        fs.mkdirSync(dir);
+      }
+
+      const promises = notUsedImages.map((image) => {
+        const newPath = image.fullPath.replace('images/', `${dir}/`);
+
+        return fs.promises.rename(image.fullPath, newPath);
+      });
+
+      await Promise.all(promises);
+    }
   });
 });
 
 function renameCycle() {
-  const glob = require('glob');
   const path = require('path');
   const fs = require('fs');
   const { workerData, parentPort } = require('worker_threads');
@@ -214,7 +246,8 @@ function renameCycle() {
           console.log('newImagePath', newImagePath);
           console.log('err', err);
         }
-        parentPort.postMessage({ message: 'inc' });
+
+        parentPort.postMessage({ message: 'inc', image });
       });
     });
   }

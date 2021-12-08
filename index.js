@@ -1,4 +1,5 @@
 const fs = require('fs');
+const fse = require('fs-extra');
 const path = require('path');
 const glob = require('glob');
 const csv = require('csv-parser');
@@ -198,7 +199,7 @@ glob('*.csv', { nodir: true }, async (err, files) => {
       const promises = notUsedImages.map((image) => {
         const newPath = image.fullPath.replace('images/', `${dir}/`);
 
-        return fs.promises.rename(image.fullPath, newPath);
+        return fse.move(image.fullPath, newPath);
       });
 
       await Promise.all(promises);
